@@ -180,7 +180,7 @@ Tôi xem thử giá trị của `&DAT_00106170`.
 
 ```  
 
-Sắp xếp lại ta có được dãy byte: `e1 51 67 57 d5 87 9a 29 61 bf 5d fd 44 13 7e 75 è 0f f5 fa`.  
+Sắp xếp lại ta có được dãy byte: `e1 51 67 57 d5 87 9a 29 61 bf 5d fd 44 13 7e 75 ef 0f f5 fa`.  
 
 Thấy dài dài thế này là cảm thấy căng rồi. Phải nghĩ ngay đếm hàm `hash`. Dù sao thì tôi thử lên crackstation để check xem sao, và tôi được dãy số `02100101`. May mắn thay, đây là flag.  
 
