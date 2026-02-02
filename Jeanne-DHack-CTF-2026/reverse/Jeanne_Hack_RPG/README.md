@@ -128,5 +128,67 @@ Challenge này có file bị `strip`, nên việc reverse sẽ hơi khó khăn. 
 
 ![alt text](image-12.png)  
 
+Hàm `sus_func()` này yêu cầu `sus_param` chính xác thì mới in ra flag chuẩn. `sus_func()` được gọi ở hàm `card_game()`.  
+
+![alt text](image-14.png)  
+
+Ta cần quan tâm đến đoạn code sau trong hàm `card_game()`.  
+
+```c
+hash_func(sus_param,8,sus_param_hash);
+iVar4 = memcmp(sus_param_hash,&DAT_00106170,0x14);
+if (iVar4 == 0) {
+  sus_func_ret_val = sus_func(sus_param);
+}
+else {
+  sus_func_ret_val = sus_func(0);
+}
+return sus_func_ret_val;
+```  
+
+Đoạn code này thực hiện hash biến `sus_param`, trả về `sus_param_hash`. Sau đó so sánh 20 byte đầu `sus_param_hash` với `&DAT_00106170`, nếu bằng nhau thì gọi `sus_func(sus_param)`.  
+
+Nhiệm vụ tôi cần làm là crack hàm `hash_func()`. Nhưng hàm này rất dài và khó crack được.  
+
+![alt text](image-15.png)  
+
+Tôi xem thử giá trị của `&DAT_00106170`.  
+
+```asm
+                             DAT_00106170                                    XREF[2]:     card_game:001020aa (*) , 
+                                                                                          card_game:001020b1 (*)   
+        00106170 e1              ??         E1h
+        00106171 51              ??         51h    Q
+        00106172 67              ??         67h    g
+        00106173 57              ??         57h    W
+        00106174 d5              ??         D5h
+        00106175 87              ??         87h
+        00106176 9a              ??         9Ah
+        00106177 29              ??         29h    )
+        00106178 61              ??         61h    a
+        00106179 bf              ??         BFh
+        0010617a 5d              ??         5Dh    ]
+        0010617b fd              ??         FDh
+        0010617c 44              ??         44h    D
+        0010617d 13              ??         13h
+        0010617e 7e              ??         7Eh    ~
+        0010617f 75              ??         75h    u
+        00106180 ef              ??         EFh
+        00106181 0f              ??         0Fh
+        00106182 f5              ??         F5h
+        00106183 fa              ??         FAh
+
+```  
+
+Sắp xếp lại ta có được dãy byte: `e1 51 67 57 d5 87 9a 29 61 bf 5d fd 44 13 7e 75 è 0f f5 fa`.  
+
+Thấy dài dài thế này là cảm thấy căng rồi. Phải nghĩ ngay đếm hàm `hash`. Dù sao thì tôi thử lên crackstation để check xem sao, và tôi được dãy số `02100101`. May mắn thay, đây là flag.  
+
+Loại hash sử dụng (theo crackstation) là `ripemd160`.
+
+![alt text](image-13.png)  
+
+Flag: `JDHACK{02100101}`
+
 
 
